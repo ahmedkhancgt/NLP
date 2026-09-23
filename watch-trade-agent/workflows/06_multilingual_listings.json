@@ -1,0 +1,282 @@
+{
+  "id": "watchTradeWf0600",
+  "name": "06 - Multilingual listings (every 15 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "2346bf5c-3416-46bf-be25-ea5aa4a8350e",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT w.*,\n       (SELECT value FROM settings WHERE key = 'listing_languages') AS listing_languages,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'owner_email') AS owner_email,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM watches w\nWHERE NOT w.listings_done\n  AND w.status = 'in_stock'\n  AND w.auth_status IN ('ai_checked', 'watchmaker_verified')\nORDER BY w.id\nLIMIT 5;",
+        "options": {}
+      },
+      "id": "ce2ef221-67c1-4fdf-98b2-52ce62b2adc6",
+      "name": "Watches without listings",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const w = $json;\n\nconst SYSTEM = \"You write listings for a professional pre-owned and new luxury watch dealer. Write in a confident, accurate, premium tone, native quality for each language (not a word-for-word translation). Only use facts you are given - never invent service history, accessories, or claims of authenticity certification. Title: max 80 characters, brand + model + reference + key feature. Description: 120-200 words, short paragraphs, then a bullet list of specifications you were given. Do not mention the price.\";\nconst SCHEMA = {\n  \"type\": \"object\",\n  \"properties\": {\n    \"listings\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"language\": {\n            \"type\": \"string\"\n          },\n          \"title\": {\n            \"type\": \"string\"\n          },\n          \"description\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"language\",\n          \"title\",\n          \"description\"\n        ],\n        \"additionalProperties\": false\n      }\n    }\n  },\n  \"required\": [\n    \"listings\"\n  ],\n  \"additionalProperties\": false\n};\nconst userContent = `Write one listing per language for these language codes: ${w.listing_languages}.\nUse the language code in the \"language\" field.\n\nDealer: ${w.business_name}\nBrand: ${w.brand}\nModel: ${w.model || ''}\nReference: ${w.reference}\nYear: ${w.year || 'unknown'}\nCondition: ${w.condition}\nBox and papers: ${w.box_papers ? 'yes, full set' : 'no'}\nWatch located in: ${w.location_country || 'unknown'}\nDealer notes: ${w.notes || '-'}`;\n\nreturn {\n  json: {\n    claude_request: {\n      model: 'claude-opus-5',\n      max_tokens: 16000,\n      fallbacks: 'default',              // if the model declines, Anthropic retries on a fallback model\n      system: SYSTEM,\n      messages: [{ role: 'user', content: userContent }],\n      output_config: {\n        effort: 'medium',             // low / medium / high: more effort = better answers, more cost\n        format: { type: 'json_schema', schema: SCHEMA },\n      },\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "a65dad78-8a3e-4ada-a26b-a25b53c6b142",
+      "name": "Build listing request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "28d8a9ae-82be-4d56-b423-d20c6109280a",
+      "name": "Ask Claude (listings)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read Claude's answer. The answer is JSON because we asked for a JSON schema.\nconst res = $json;\nif (res.stop_reason === 'refusal') {\n  throw new Error('Claude declined this request: ' + JSON.stringify(res.stop_details || {}));\n}\nconst text = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('');\nif (!text) {\n  throw new Error('Claude returned no text: ' + JSON.stringify(res).slice(0, 500));\n}\nconst ai = JSON.parse(text);\n\nreturn { json: { watch_id: $('Watches without listings').item.json.id, listings: ai.listings } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "ca72a06f-99d7-4e45-9681-02ece5bea6e1",
+      "name": "Read listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH saved AS (\n    INSERT INTO listings (watch_id, language, title, description)\n    SELECT $1::INT, x.language, x.title, x.description\n    FROM jsonb_to_recordset($2::jsonb) AS x(language TEXT, title TEXT, description TEXT)\n    ON CONFLICT (watch_id, language) DO UPDATE\n    SET title = EXCLUDED.title, description = EXCLUDED.description\n    RETURNING watch_id\n)\nUPDATE watches SET listings_done = TRUE\nWHERE id = $1::INT\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [$json.watch_id, JSON.stringify($json.listings)] }}"
+        }
+      },
+      "id": "2b23fa46-7755-41f8-b852-dffa3ae39975",
+      "name": "Save listings",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Make text safe to put inside an HTML email\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst money = (n) => n == null || n === '' ? '-' : '$' + Math.round(Number(n)).toLocaleString('en-US');\n\nconst w = $('Watches without listings').item.json;\nconst listings = $('Read listings').item.json.listings;\nconst blocks = listings.map(l => `<h4>[${esc(l.language)}] ${esc(l.title)}</h4><p style=\"white-space:pre-wrap\">${esc(l.description)}</p>`).join('<hr>');\nreturn {\n  json: {\n    owner_email: w.owner_email,\n    from_email: w.from_email,\n    subject: `Listings ready: ${w.brand} ${w.reference} (stock #${w.id})`,\n    html: `<p>Copy these into your website, Chrono24, eBay or social media.</p>${blocks}`,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "7d5fd4df-dc93-45cf-9a51-ad6e22521996",
+      "name": "Build listings email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.owner_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "options": {
+          "appendAttribution": false
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "a8b22ff5-dea8-41c4-9544-6d3aced68800",
+      "name": "Email owner",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2520,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "6fbda367-e4dd-4301-aeba-3108f1d49e95",
+      "name": "Stop if no rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Multilingual listings\nFor every checked watch without listings, Claude writes a title and description in each language from the `listing_languages` setting (default: English, Arabic, French, German, Chinese). They are saved in `listings` and emailed to you for copy-paste.",
+        "height": 200,
+        "width": 520
+      },
+      "id": "ac87d024-3d00-4778-8a6a-dfc1c6a97911",
+      "name": "Note 9",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "Watches without listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Watches without listings": {
+      "main": [
+        [
+          {
+            "node": "Stop if no rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no rows": {
+      "main": [
+        [
+          {
+            "node": "Build listing request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build listing request": {
+      "main": [
+        [
+          {
+            "node": "Ask Claude (listings)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Claude (listings)": {
+      "main": [
+        [
+          {
+            "node": "Read listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read listings": {
+      "main": [
+        [
+          {
+            "node": "Save listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save listings": {
+      "main": [
+        [
+          {
+            "node": "Build listings email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build listings email": {
+      "main": [
+        [
+          {
+            "node": "Email owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

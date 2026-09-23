@@ -1,0 +1,440 @@
+{
+  "id": "watchTradeWf1200",
+  "name": "12 - Sale, shipment and tracking",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Record a sale and shipment",
+        "formDescription": "Use ONLY after a human has confirmed the payment.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Stock number",
+              "fieldType": "number",
+              "requiredField": true,
+              "placeholder": "Watch id"
+            },
+            {
+              "fieldLabel": "Customer email",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Customer name",
+              "fieldType": "text"
+            },
+            {
+              "fieldLabel": "Customer country",
+              "fieldType": "text",
+              "placeholder": "2 letters"
+            },
+            {
+              "fieldLabel": "Sale price USD",
+              "fieldType": "number",
+              "requiredField": true,
+              "placeholder": "Final agreed price"
+            },
+            {
+              "fieldLabel": "Carrier",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "DHL"
+                  },
+                  {
+                    "option": "FedEx"
+                  },
+                  {
+                    "option": "UPS"
+                  },
+                  {
+                    "option": "Other"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Tracking number",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Destination country",
+              "fieldType": "text",
+              "placeholder": "2 letters"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0bb8b8a4-81b9-4117-a0ac-f6f3713ab69b",
+      "name": "Record sale form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        300
+      ],
+      "webhookId": "56e2344d-d897-4829-bc2d-559ee27fe72e"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH c AS (\n    INSERT INTO customers (email, name, country, last_contact_at, last_purchase_at)\n    VALUES (lower(trim($2)), NULLIF($3, ''), NULLIF(upper(trim($4)), ''), now(), now())\n    ON CONFLICT (email) DO UPDATE\n    SET last_purchase_at = now(), last_contact_at = now(),\n        name = COALESCE(customers.name, EXCLUDED.name),\n        country = COALESCE(customers.country, EXCLUDED.country)\n    RETURNING *\n),\nw AS (\n    UPDATE watches SET status = 'shipped', sold_at = now()\n    WHERE id = $1::INT\n    RETURNING *\n),\np AS (\n    INSERT INTO purchases (customer_id, watch_id, sale_price_usd)\n    SELECT c.id, w.id, $5::NUMERIC FROM c, w\n),\ni AS (\n    INSERT INTO customer_interests (customer_id, brand, source)\n    SELECT c.id, w.brand, 'purchase' FROM c, w\n    ON CONFLICT (customer_id, lower(brand), lower(coalesce(reference, ''))) DO NOTHING\n),\ns AS (\n    INSERT INTO shipments (watch_id, customer_id, carrier, tracking_number, destination_country)\n    SELECT w.id, c.id, $6, trim($7), NULLIF(upper(trim($8)), '') FROM c, w\n    RETURNING *\n)\nSELECT s.id AS shipment_id, s.carrier, s.tracking_number, c.id AS customer_id, c.name, c.email, c.language,\n       w.brand, w.model, w.reference,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM s, c, w;",
+        "options": {
+          "queryReplacement": "={{ [String($json[\"Stock number\"]), $json[\"Customer email\"], $json[\"Customer name\"] ?? \"\", $json[\"Customer country\"] ?? \"\", String($json[\"Sale price USD\"]), $json[\"Carrier\"], $json[\"Tracking number\"], $json[\"Destination country\"] ?? \"\"] }}"
+        }
+      },
+      "id": "b086f24b-5e20-4898-a388-de2ae0173a88",
+      "name": "Save sale + shipment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Make text safe to put inside an HTML email\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst money = (n) => n == null || n === '' ? '-' : '$' + Math.round(Number(n)).toLocaleString('en-US');\n\nfunction trackingLink(carrier, number) {\n  const n = encodeURIComponent(number);\n  if (carrier === 'DHL') return `https://www.dhl.com/global-en/home/tracking/tracking-express.html?submit=1&tracking-id=${n}`;\n  if (carrier === 'FedEx') return `https://www.fedex.com/fedextrack/?trknbr=${n}`;\n  if (carrier === 'UPS') return `https://www.ups.com/track?tracknum=${n}`;\n  return '';\n}\n\nconst d = $json;\nconst link = trackingLink(d.carrier, d.tracking_number);\nreturn {\n  json: {\n    ...d,\n    subject: `Your ${d.brand} ${d.reference} is on its way`,\n    html: `<p>Dear ${esc(d.name || 'customer')},</p>\n<p>Thank you for your purchase. Your ${esc(d.brand)} ${esc(d.model)} ${esc(d.reference)} has been shipped with ${esc(d.carrier)}.</p>\n<p>Tracking number: <b>${esc(d.tracking_number)}</b>${link ? ` - <a href=\"${link}\">track your parcel</a>` : ''}</p>\n<p>The parcel is insured and needs a signature on delivery. Import duties and taxes may apply in your country.</p>\n<p>${esc(d.business_name)}</p>`,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "08a4b365-c0bf-45cf-8f74-c9ac0b06e64e",
+      "name": "Build shipped email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "options": {
+          "appendAttribution": false
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "1a76214a-5c08-4355-9c29-cf438dcd3a61",
+      "name": "Email customer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages_log (customer_id, campaign, subject)\nVALUES ($1::INT, 'shipping', $2);",
+        "options": {
+          "queryReplacement": "={{ [$('Build shipped email').item.json.customer_id, $('Build shipped email').item.json.subject] }}"
+        }
+      },
+      "id": "deccca75-ea19-41a4-b695-03de6980db4f",
+      "name": "Log message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "d936171a-caae-41be-9c49-819b14252eb9",
+      "name": "Every 6 hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT s.id AS shipment_id, s.tracking_number, s.status,\n       c.name, c.email, w.brand, w.reference,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM shipments s\nJOIN customers c ON c.id = s.customer_id\nJOIN watches w   ON w.id = s.watch_id\nWHERE s.carrier = 'DHL'\n  AND s.status NOT IN ('delivered', 'failure')\n  AND s.created_at > now() - INTERVAL '60 days';",
+        "options": {}
+      },
+      "id": "f81e89b4-2c95-4af0-b31b-7562adacc5b1",
+      "name": "Open DHL shipments",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api-eu.dhl.com/track/shipments",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "trackingNumber",
+              "value": "={{ $json.tracking_number }}"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "id": "dfef2671-ea75-438e-abb3-a0801d17e91d",
+      "name": "DHL tracking API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        700
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compare the DHL status with the one in our database. Only changes continue.\nconst shipments = $('Open DHL shipments').all();\nconst changed = [];\n$input.all().forEach((item, i) => {\n  const index = item.pairedItem?.item ?? i;\n  const s = shipments[index]?.json;\n  const status = item.json.shipments?.[0]?.status;\n  if (!s || !status?.statusCode) return;\n  if (status.statusCode === s.status) return;\n  changed.push({\n    json: { ...s, new_status: status.statusCode, detail: status.description || status.status || '' },\n    pairedItem: { item: index },\n  });\n});\nreturn changed;\n"
+      },
+      "id": "474d43c9-e009-4421-b00c-4d4a9d242fc1",
+      "name": "Keep changed statuses",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE shipments\nSET status = $2, status_detail = $3, updated_at = now(),\n    delivered_at = CASE WHEN $2 = 'delivered' THEN now() ELSE delivered_at END\nWHERE id = $1::INT;",
+        "options": {
+          "queryReplacement": "={{ [$json.shipment_id, $json.new_status, $json.detail] }}"
+        }
+      },
+      "id": "623ef548-1363-4c66-bf52-4f9e03354cf6",
+      "name": "Update shipment",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Make text safe to put inside an HTML email\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst money = (n) => n == null || n === '' ? '-' : '$' + Math.round(Number(n)).toLocaleString('en-US');\n\nconst d = $('Keep changed statuses').item.json;\nconst words = { 'pre-transit': 'is being prepared', transit: 'is on its way', delivered: 'has been delivered', failure: 'has a delivery problem' };\nreturn {\n  json: {\n    ...d,\n    subject: `Your ${d.brand} ${d.reference} ${words[d.new_status] || 'has a new status'}`,\n    html: `<p>Dear ${esc(d.name || 'customer')},</p>\n<p>Update for your ${esc(d.brand)} ${esc(d.reference)} (DHL ${esc(d.tracking_number)}): <b>${esc(d.detail || d.new_status)}</b>.</p>\n<p>${esc(d.business_name)}</p>`,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "b8254e36-0959-41b8-8822-2c947a67ee12",
+      "name": "Build status email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "options": {
+          "appendAttribution": false
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "21a3e128-7841-487e-99cf-150c526aea35",
+      "name": "Email status to customer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2240,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "5ff9f556-1482-4f53-90a8-c2ab33682477",
+      "name": "Stop if no rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Sales & shipping (human first)\n**Payment is confirmed by a human.** Then fill the form: the sale is saved (customer database, purchase history, interests), the watch is marked shipped and the customer gets a tracking email.\n\nEvery 6 hours DHL shipments are checked (free DHL API key, *Header Auth* `DHL-API-Key`) and the customer is told when the status changes.",
+        "height": 260,
+        "width": 560
+      },
+      "id": "c4f426c3-fefc-496a-ba54-624a5952792f",
+      "name": "Note 13",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        280,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Record sale form": {
+      "main": [
+        [
+          {
+            "node": "Save sale + shipment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save sale + shipment": {
+      "main": [
+        [
+          {
+            "node": "Build shipped email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build shipped email": {
+      "main": [
+        [
+          {
+            "node": "Email customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email customer": {
+      "main": [
+        [
+          {
+            "node": "Log message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every 6 hours": {
+      "main": [
+        [
+          {
+            "node": "Open DHL shipments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open DHL shipments": {
+      "main": [
+        [
+          {
+            "node": "Stop if no rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no rows": {
+      "main": [
+        [
+          {
+            "node": "DHL tracking API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DHL tracking API": {
+      "main": [
+        [
+          {
+            "node": "Keep changed statuses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep changed statuses": {
+      "main": [
+        [
+          {
+            "node": "Update shipment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update shipment": {
+      "main": [
+        [
+          {
+            "node": "Build status email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build status email": {
+      "main": [
+        [
+          {
+            "node": "Email status to customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

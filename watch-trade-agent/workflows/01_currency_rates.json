@@ -1,0 +1,156 @@
+{
+  "id": "watchTradeWf0100",
+  "name": "01 - Currency rates (daily)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "id": "395c0e19-6bc5-4a33-9f6b-56748cfa67bd",
+      "name": "Every day 06:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.frankfurter.app/latest?from=USD",
+        "options": {}
+      },
+      "id": "e805eceb-4a3a-4aa1-ae6e-b915b99bf752",
+      "name": "Get ECB rates (Frankfurter)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000
+    },
+    {
+      "parameters": {
+        "jsCode": "// The European Central Bank does not publish Gulf currencies.\n// They are pegged (fixed) to the US dollar, so we add them by hand.\nconst rates = { ...$json.rates, USD: 1 };\nconst pegged = { AED: 3.6725, SAR: 3.75, QAR: 3.64, BHD: 0.376, OMR: 0.3845 };\nfor (const [currency, perUsd] of Object.entries(pegged)) {\n  if (!rates[currency]) rates[currency] = perUsd;\n}\nreturn [{ json: { rates } }];\n"
+      },
+      "id": "67d06d69-8a98-4cf4-91b2-8cae2a7f0ea5",
+      "name": "Add Gulf currencies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO fx_rates (currency, per_usd, updated_at)\nSELECT key, value::NUMERIC, now()\nFROM jsonb_each_text($1::jsonb)\nON CONFLICT (currency) DO UPDATE\nSET per_usd = EXCLUDED.per_usd, updated_at = now()\nRETURNING currency;",
+        "options": {
+          "queryReplacement": "={{ [JSON.stringify($json.rates)] }}"
+        }
+      },
+      "id": "bacb29b5-91c2-4b4e-913d-0e78602bc56d",
+      "name": "Save rates",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1120,
+        300
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE market_prices mp\nSET price_usd = ROUND(mp.price / fx.per_usd, 2)\nFROM fx_rates fx\nWHERE mp.price_usd IS NULL\n  AND fx.currency = mp.currency\nRETURNING mp.id;",
+        "options": {}
+      },
+      "id": "887eaa11-162c-4e40-8743-90958e8a7605",
+      "name": "Fill missing USD prices",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1400,
+        300
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "content": "## Currency rates\nOnce a day, downloads official European Central Bank rates (free, no key) and stores *how many units of each currency = 1 USD* in `fx_rates`.\n\nEvery price is converted to USD so watches can be compared across countries.",
+        "height": 220,
+        "width": 520
+      },
+      "id": "6b8bf63e-00f8-4b75-b5f1-32fd95dc5880",
+      "name": "Note 5",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Every day 06:00": {
+      "main": [
+        [
+          {
+            "node": "Get ECB rates (Frankfurter)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get ECB rates (Frankfurter)": {
+      "main": [
+        [
+          {
+            "node": "Add Gulf currencies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Gulf currencies": {
+      "main": [
+        [
+          {
+            "node": "Save rates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save rates": {
+      "main": [
+        [
+          {
+            "node": "Fill missing USD prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

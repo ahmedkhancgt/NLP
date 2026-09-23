@@ -1,0 +1,243 @@
+{
+  "id": "watchTradeWf0200",
+  "name": "02 - Collect eBay prices (every 6 hours)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "f6caeb4f-b2a6-44f2-be25-fc72f86126c2",
+      "name": "Every 6 hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT brand, model, reference\nFROM tracked_references\nWHERE active\nORDER BY id;",
+        "options": {}
+      },
+      "id": "441e12ec-9bd8-4c27-b266-abc14f4a82ce",
+      "name": "Get tracked references",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// One search per reference per eBay country site.\n// Add or remove sites here (EBAY_US, EBAY_GB, EBAY_DE, EBAY_FR, EBAY_IT, EBAY_AU, EBAY_CH, EBAY_HK ...)\nconst MARKETPLACES = ['EBAY_US', 'EBAY_GB', 'EBAY_DE', 'EBAY_CH', 'EBAY_HK'];\n\nconst searches = [];\nfor (const item of $input.all()) {\n  for (const marketplace of MARKETPLACES) {\n    searches.push({\n      json: {\n        brand: item.json.brand,\n        reference: item.json.reference,\n        query: `${item.json.brand} ${item.json.reference}`,\n        marketplace,\n      },\n    });\n  }\n}\nreturn searches;\n"
+      },
+      "id": "cb7fa097-0422-40bc-baec-27d9f8713fa8",
+      "name": "Build searches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.ebay.com/buy/browse/v1/item_summary/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "category_ids",
+              "value": "31387"
+            },
+            {
+              "name": "limit",
+              "value": "50"
+            },
+            {
+              "name": "filter",
+              "value": "buyingOptions:{FIXED_PRICE}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-EBAY-C-MARKETPLACE-ID",
+              "value": "={{ $json.marketplace }}"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          }
+        }
+      },
+      "id": "50ef932f-1aa1-4d6d-978b-599ff0eec72f",
+      "name": "Search eBay",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep only real, complete watches whose title contains the reference number.\nconst JUNK = /(box only|empty box|strap only|bracelet only|for parts|not working|repair|replica|homage|dial only|bezel only|papers only|manual only)/i;\nconst clean = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n\n// eBay condition text -> our condition names (see table condition_factors)\nfunction mapCondition(text) {\n  const t = String(text || '').toLowerCase();\n  if (t.startsWith('new with')) return 'new';\n  if (t.startsWith('new')) return 'unworn';\n  if (t.includes('parts')) return 'fair';\n  return 'good'; // \"Pre-owned\": we do not know more, so we assume \"good\"\n}\n\nconst searches = $('Build searches').all();\nconst rows = [];\n\n$input.all().forEach((item, i) => {\n  const index = item.pairedItem?.item ?? i;\n  const search = searches[index]?.json;\n  if (!search || !item.json.itemSummaries) return; // error or no results\n\n  for (const s of item.json.itemSummaries) {\n    const title = s.title || '';\n    if (JUNK.test(title)) continue;\n    if (!clean(title).includes(clean(search.reference))) continue;\n    if (!s.price?.value) continue;\n\n    rows.push({\n      json: {\n        external_id: s.itemId,\n        seller: s.seller?.username || null,\n        brand: search.brand,\n        reference: search.reference,\n        title,\n        condition: mapCondition(s.condition),\n        price: Number(s.price.value),\n        currency: s.price.currency,\n        country: s.itemLocation?.country || null,\n        url: s.itemWebUrl || null,\n      },\n    });\n  }\n});\nreturn rows;\n"
+      },
+      "id": "dc0b9748-bb51-4469-8521-6991d995bcde",
+      "name": "Clean listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO market_prices\n    (source, external_id, seller, brand, reference, title, condition, price, currency, price_usd, country, url)\nVALUES\n    ('ebay', $1, $2, $3, $4, $5, $6, $7::NUMERIC, $8,\n     ROUND($7::NUMERIC / (SELECT per_usd FROM fx_rates WHERE currency = $8), 2),\n     NULLIF($9, ''), $10)\nON CONFLICT (source, external_id, observed_on) DO NOTHING;",
+        "options": {
+          "queryReplacement": "={{ [$json.external_id, $json.seller, $json.brand, $json.reference, $json.title, $json.condition, $json.price, $json.currency, $json.country || '', $json.url] }}"
+        }
+      },
+      "id": "e13f578e-886c-4812-aebf-e3de4a2542cd",
+      "name": "Save prices",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "535a7f25-af46-4fe5-977c-4ec6368198fa",
+      "name": "Stop if no rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## eBay prices (official API)\nSearches eBay in 5 countries for every active row in `tracked_references`, removes junk (straps, empty boxes, replicas...) and saves the asking prices.\n\n**Credential:** *OAuth2 API* on **Search eBay** - Grant type *Client Credentials*, Access token URL `https://api.ebay.com/identity/v1/oauth2/token`, Scope `https://api.ebay.com/oauth/api_scope`, Authentication *Header*.\n\n**Other sources:** WatchCharts (paid API) can be added as another HTTP Request node; auction results, dealers and Chrono24 go in through workflow 03 (form).",
+        "height": 300,
+        "width": 620
+      },
+      "id": "a3b1300d-6710-4252-a806-4c12d6e9b971",
+      "name": "Note 7",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -60
+      ]
+    }
+  ],
+  "connections": {
+    "Every 6 hours": {
+      "main": [
+        [
+          {
+            "node": "Get tracked references",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get tracked references": {
+      "main": [
+        [
+          {
+            "node": "Stop if no rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no rows": {
+      "main": [
+        [
+          {
+            "node": "Build searches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build searches": {
+      "main": [
+        [
+          {
+            "node": "Search eBay",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search eBay": {
+      "main": [
+        [
+          {
+            "node": "Clean listings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean listings": {
+      "main": [
+        [
+          {
+            "node": "Save prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

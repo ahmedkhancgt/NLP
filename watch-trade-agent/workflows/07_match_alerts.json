@@ -1,0 +1,257 @@
+{
+  "id": "watchTradeWf0700",
+  "name": "07 - Instant alerts: matching watch arrived (every 15 min)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "81c94482-45a4-4377-9373-19cc055640fc",
+      "name": "Every 15 minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id\nFROM watches\nWHERE NOT alerts_sent\n  AND listings_done\n  AND status = 'in_stock'\n  AND auth_status IN ('ai_checked', 'watchmaker_verified');",
+        "options": {}
+      },
+      "id": "ec15a3ba-90d1-4f0d-8336-67c768e18cf6",
+      "name": "New watches ready",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT DISTINCT ON (c.id)\n       w.id AS watch_id, w.brand, w.model, w.reference, w.year, w.condition, w.box_papers, w.ask_usd,\n       c.id AS customer_id, c.name, c.email, c.language,\n       COALESCE(l.title, en.title)             AS listing_title,\n       COALESCE(l.description, en.description) AS listing_description,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM watches w\nJOIN customer_interests ci\n  ON lower(ci.brand) = lower(w.brand)\n AND (ci.reference IS NULL OR lower(ci.reference) = lower(w.reference))\n AND (ci.max_budget_usd IS NULL OR w.ask_usd <= ci.max_budget_usd)\nJOIN customers c ON c.id = ci.customer_id AND c.marketing_opt_in\nLEFT JOIN listings l  ON l.watch_id = w.id AND l.language = c.language\nLEFT JOIN listings en ON en.watch_id = w.id AND en.language = 'en'\nWHERE w.id = $1::INT\n  AND NOT EXISTS (SELECT 1 FROM messages_log m\n                  WHERE m.customer_id = c.id AND m.watch_id = w.id)\nORDER BY c.id;",
+        "options": {
+          "queryReplacement": "={{ [$json.id] }}"
+        }
+      },
+      "id": "889bde11-52a8-4d49-bb6f-65ad26fc8029",
+      "name": "Find interested customers",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Make text safe to put inside an HTML email\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst money = (n) => n == null || n === '' ? '-' : '$' + Math.round(Number(n)).toLocaleString('en-US');\n\n// Email text in the customer's language. Add more languages by copying a block.\nconst TEXT = {\n  en: { arrived: 'Just arrived', hello: 'Hello', intro: 'A watch you are looking for has just arrived:', price: 'Price',\n        reply: 'Reply to this email to reserve a viewing or ask a question.',\n        footer: 'You receive this because you asked to be told about matching watches. Reply STOP to unsubscribe.' },\n  ar: { arrived: 'وصلت الآن', hello: 'مرحباً', intro: 'وصلت للتو ساعة تبحث عنها:', price: 'السعر',\n        reply: 'رد على هذه الرسالة لحجز موعد معاينة أو لطرح أي سؤال.',\n        footer: 'تصلك هذه الرسالة لأنك طلبت إبلاغك بالساعات المطابقة. أرسل STOP لإلغاء الاشتراك.' },\n  fr: { arrived: 'Nouvelle arrivée', hello: 'Bonjour', intro: 'Une montre que vous recherchez vient d’arriver :', price: 'Prix',\n        reply: 'Répondez à cet e-mail pour réserver une présentation ou poser une question.',\n        footer: 'Vous recevez ce message car vous avez demandé à être informé des montres correspondantes. Répondez STOP pour vous désabonner.' },\n  de: { arrived: 'Neu eingetroffen', hello: 'Hallo', intro: 'Eine Uhr, die Sie suchen, ist gerade eingetroffen:', price: 'Preis',\n        reply: 'Antworten Sie auf diese E-Mail, um einen Besichtigungstermin zu reservieren oder eine Frage zu stellen.',\n        footer: 'Sie erhalten diese E-Mail, weil Sie über passende Uhren informiert werden möchten. Antworten Sie STOP zum Abmelden.' },\n  zh: { arrived: '新品到货', hello: '您好', intro: '您正在寻找的腕表刚刚到货：', price: '价格',\n        reply: '回复此邮件即可预约看表或咨询问题。',\n        footer: '您收到此邮件是因为您订阅了匹配腕表通知。回复 STOP 即可退订。' },\n};\nconst d = $json;\nconst t = TEXT[d.language] || TEXT.en;\nconst dir = d.language === 'ar' ? 'rtl' : 'ltr';\nconst title = d.listing_title || `${d.brand} ${d.model || ''} ${d.reference}`;\nreturn {\n  json: {\n    ...d,\n    subject: `${t.arrived}: ${title}`,\n    html: `<div dir=\"${dir}\"><p>${t.hello} ${esc(d.name || '')},</p>\n<p>${t.intro}</p>\n<h3>${esc(title)}</h3>\n<p style=\"white-space:pre-wrap\">${esc(d.listing_description || '')}</p>\n<p><b>${t.price}: ${money(d.ask_usd)}</b></p>\n<p>${t.reply}</p>\n<p>${esc(d.business_name)}</p>\n<p style=\"color:#888;font-size:11px\">${t.footer}</p></div>`,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "04e07242-4e4a-4cb3-b934-40b1f7fcb0c8",
+      "name": "Build alert email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "options": {
+          "appendAttribution": false
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "cbe7b08c-c772-42aa-bc7f-868743e5f3c4",
+      "name": "Send alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages_log (customer_id, campaign, watch_id, subject)\nVALUES ($1::INT, 'match_alert', $2::INT, $3);",
+        "options": {
+          "queryReplacement": "={{ [$('Build alert email').item.json.customer_id, $('Build alert email').item.json.watch_id, $('Build alert email').item.json.subject] }}"
+        }
+      },
+      "id": "1296ae1c-1541-461e-9791-a6832232becc",
+      "name": "Log message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "4afcf756-51fc-48ee-bf3b-6b5db0cdf876",
+      "name": "Stop if no new watches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "63d0dd6c-5149-49b7-a167-ed26b5ad228c",
+      "name": "Stop if nobody matches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- runs after the emails above, so a failed run is retried next time\nUPDATE watches SET alerts_sent = TRUE WHERE id = $1::INT;",
+        "options": {
+          "queryReplacement": "={{ [$json.id] }}"
+        }
+      },
+      "id": "5e780cac-be48-47d4-94d3-eb8b0b964be2",
+      "name": "Mark alerts sent",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1120,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Instant match alerts\nWhen a checked watch gets its listings, every opted-in customer whose interests match (brand, optional reference, budget) gets an email in their language. Each customer gets each watch only once (`messages_log`).",
+        "height": 200,
+        "width": 520
+      },
+      "id": "549cb36b-97bf-4b60-b2c8-4bd065c2aefc",
+      "name": "Note 9",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Every 15 minutes": {
+      "main": [
+        [
+          {
+            "node": "New watches ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "New watches ready": {
+      "main": [
+        [
+          {
+            "node": "Stop if no new watches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no new watches": {
+      "main": [
+        [
+          {
+            "node": "Find interested customers",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Mark alerts sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find interested customers": {
+      "main": [
+        [
+          {
+            "node": "Stop if nobody matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if nobody matches": {
+      "main": [
+        [
+          {
+            "node": "Build alert email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build alert email": {
+      "main": [
+        [
+          {
+            "node": "Send alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send alert": {
+      "main": [
+        [
+          {
+            "node": "Log message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

@@ -1,0 +1,461 @@
+{
+  "id": "watchTradeWf0800",
+  "name": "08 - Reply to every email inquiry",
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "read",
+        "format": "simple",
+        "options": {}
+      },
+      "id": "f6550530-905b-48bf-8914-caf8fa70ffce",
+      "name": "New email (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pull out sender, subject and text. Skip automatic emails so we never reply to a robot.\nconst out = [];\nfor (const item of $input.all()) {\n  const m = item.json;\n  const fromRaw = typeof m.from === 'string' ? m.from : (m.from?.text || m.from?.value?.[0]?.address || '');\n  const emailMatch = fromRaw.match(/[\\w.+'-]+@[\\w-]+(\\.[\\w-]+)+/);\n  if (!emailMatch) continue;\n  const email = emailMatch[0].toLowerCase();\n  const name = fromRaw.replace(/<.*>/, '').replace(/\"/g, '').trim();\n  if (/(no-?reply|mailer-daemon|postmaster|notifications?@|bounce)/i.test(email)) continue;\n  const autoSubmitted = m.metadata?.['auto-submitted'];\n  if (autoSubmitted && autoSubmitted !== 'no') continue; // out-of-office and other automatic replies\n\n  const subject = m.subject || '';\n  const text = String(m.textPlain || m.text || m.textHtml || m.html || '')\n    .replace(/<[^>]+>/g, ' ')\n    .slice(0, 8000);\n  const firstLine = text.trim().split('\\n')[0].trim();\n  const unsubscribe = /^(stop|unsubscribe)\\b/i.test(firstLine) || /^(stop|unsubscribe)$/i.test(subject.trim());\n\n  out.push({ json: { email, name: name === email ? '' : name, subject, text, unsubscribe } });\n}\nreturn out;\n"
+      },
+      "id": "75950b07-5cfc-47da-b40e-cb15c004acc5",
+      "name": "Read email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH c AS (\n    INSERT INTO customers (name, email, last_contact_at)\n    VALUES (NULLIF($1, ''), $2, now())\n    ON CONFLICT (email) DO UPDATE\n    SET last_contact_at = now(),\n        name = COALESCE(customers.name, EXCLUDED.name)\n    RETURNING *\n)\nSELECT c.id AS customer_id, c.name, c.email, c.language, c.country, c.marketing_opt_in,\n       (SELECT string_agg(w.brand || ' ' || w.reference || ' (' || to_char(p.sold_at, 'YYYY-MM') || ')', ', ')\n          FROM purchases p JOIN watches w ON w.id = p.watch_id\n         WHERE p.customer_id = c.id) AS past_purchases,\n       (SELECT string_agg(ci.brand || COALESCE(' ' || ci.reference, ''), ', ')\n          FROM customer_interests ci WHERE ci.customer_id = c.id) AS known_interests,\n       (SELECT json_agg(s) FROM (\n            SELECT id AS stock_no, brand, model, reference, year, condition, box_papers,\n                   ask_usd AS price_usd, location_country, auth_status\n            FROM watches\n            WHERE status = 'in_stock' AND auth_status IN ('ai_checked', 'watchmaker_verified')\n            ORDER BY created_at DESC\n            LIMIT 40) s) AS inventory,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'owner_email') AS owner_email,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email,\n       (SELECT value FROM settings WHERE key = 'large_deal_usd') AS large_deal_usd,\n       (SELECT value FROM settings WHERE key = 'auto_send_replies') AS auto_send_replies\nFROM c;",
+        "options": {
+          "queryReplacement": "={{ [$json.name, $json.email] }}"
+        }
+      },
+      "id": "a20a4e2c-23b4-4c87-861c-d072eb18eced",
+      "name": "Save customer + load context",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "3ec811c7-eeb0-47e2-bb56-e0a768b507f4",
+              "leftValue": "={{ $('Read email').item.json.unsubscribe }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "087ad3d3-5b2d-44c2-a3cf-10982f13345d",
+      "name": "Unsubscribe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n    UPDATE customers SET marketing_opt_in = FALSE WHERE id = $1::INT RETURNING id\n)\nINSERT INTO inquiries (customer_id, from_email, subject, body, status)\nVALUES ($1::INT, $2, $3, $4, 'unsubscribed');",
+        "options": {
+          "queryReplacement": "={{ [$json.customer_id, $json.email, $('Read email').item.json.subject, $('Read email').item.json.text] }}"
+        }
+      },
+      "id": "35ec60df-b42b-4b4d-9c43-90a371a45a50",
+      "name": "Unsubscribe customer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1400,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $json;\nconst mail = $('Read email').item.json;\n\nconst SYSTEM = \"You answer customer emails for a luxury watch dealer (new and pre-owned). Reply in the customer's language, warmly and professionally, like a knowledgeable sales assistant. Use ONLY the stock list you are given for availability, prices and details; if a watch is not in stock, say so and offer to notify them when one arrives. Never invent watches, prices, discounts, delivery dates or guarantees. You are NOT allowed to: negotiate or promise discounts, discuss payment methods or bank details, issue receipts or invoices, or agree to a sale. When the email is about any of these, or the deal is large, set needs_human=true, and write a short polite reply saying a specialist will personally contact them shortly. Plain text only, no markdown. Sign with the business name. language = ISO 639-1 code of the customer's language. interests = watches the customer shows interest in (brand, and reference if known, else empty string). estimated_deal_usd = value of what they want to buy, 0 if unknown. is_spam_or_automated = true for spam, newsletters, auto-replies.\";\nconst SCHEMA = {\n  \"type\": \"object\",\n  \"properties\": {\n    \"language\": {\n      \"type\": \"string\"\n    },\n    \"reply_subject\": {\n      \"type\": \"string\"\n    },\n    \"reply_body\": {\n      \"type\": \"string\"\n    },\n    \"needs_human\": {\n      \"type\": \"boolean\"\n    },\n    \"human_reason\": {\n      \"type\": \"string\"\n    },\n    \"estimated_deal_usd\": {\n      \"type\": \"number\"\n    },\n    \"interests\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"brand\": {\n            \"type\": \"string\"\n          },\n          \"reference\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"brand\",\n          \"reference\"\n        ],\n        \"additionalProperties\": false\n      }\n    },\n    \"is_spam_or_automated\": {\n      \"type\": \"boolean\"\n    }\n  },\n  \"required\": [\n    \"language\",\n    \"reply_subject\",\n    \"reply_body\",\n    \"needs_human\",\n    \"human_reason\",\n    \"estimated_deal_usd\",\n    \"interests\",\n    \"is_spam_or_automated\"\n  ],\n  \"additionalProperties\": false\n};\nconst userContent = `Business name: ${c.business_name}\nCustomer: ${c.name || 'unknown name'} <${c.email}>\nKnown language: ${c.language}\nPast purchases: ${c.past_purchases || 'none'}\nKnown interests: ${c.known_interests || 'none'}\n\nStock list (JSON):\n${JSON.stringify(c.inventory || [])}\n\nCustomer email:\nSubject: ${mail.subject}\n${mail.text}`;\n\nreturn {\n  json: {\n    claude_request: {\n      model: 'claude-opus-5',\n      max_tokens: 16000,\n      fallbacks: 'default',              // if the model declines, Anthropic retries on a fallback model\n      system: SYSTEM,\n      messages: [{ role: 'user', content: userContent }],\n      output_config: {\n        effort: 'medium',             // low / medium / high: more effort = better answers, more cost\n        format: { type: 'json_schema', schema: SCHEMA },\n      },\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "4bcdd2dd-46fb-4f31-baf4-ced8c69decd0",
+      "name": "Build reply request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "cfb1d08f-2bd5-4717-8e57-e7d2d1f8fcd7",
+      "name": "Ask Claude (reply)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read Claude's answer. The answer is JSON because we asked for a JSON schema.\nconst res = $json;\nif (res.stop_reason === 'refusal') {\n  throw new Error('Claude declined this request: ' + JSON.stringify(res.stop_details || {}));\n}\nconst text = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('');\nif (!text) {\n  throw new Error('Claude returned no text: ' + JSON.stringify(res).slice(0, 500));\n}\nconst ai = JSON.parse(text);\n\nconst c = $('Save customer + load context').item.json;\nconst mail = $('Read email').item.json;\n\n// Safety net on top of Claude: these topics ALWAYS go to a human.\nconst HUMAN_TOPICS = /(payment|pay |bank|wire|transfer|iban|swift|invoice|receipt|deposit|crypto|discount|best price|negotiat|offer you|lower price|final price)/i;\nconst bigDeal = Number(ai.estimated_deal_usd || 0) >= Number(c.large_deal_usd);\nconst needsHuman = ai.needs_human || bigDeal || HUMAN_TOPICS.test(mail.subject + ' ' + mail.text);\nconst autoSend = String(c.auto_send_replies).toLowerCase() === 'true';\n\nlet reason = ai.human_reason;\nif (bigDeal) reason = `Large deal (about $${Math.round(ai.estimated_deal_usd)}). ` + (reason || '');\nif (!ai.needs_human && needsHuman && !bigDeal) reason = 'Mentions payment, discount or negotiation. ' + (reason || '');\n\nreturn {\n  json: {\n    customer_id: c.customer_id,\n    customer_email: c.email,\n    customer_name: c.name,\n    owner_email: c.owner_email,\n    from_email: c.from_email,\n    subject: mail.subject,\n    body: mail.text,\n    language: ai.language,\n    interests: ai.interests,\n    reply_subject: ai.reply_subject || ('Re: ' + mail.subject),\n    reply_body: ai.reply_body,\n    needs_human: needsHuman,\n    human_reason: needsHuman ? (reason || '') : '',\n    // what to do next\n    send_to_customer: !ai.is_spam_or_automated && autoSend,\n    notify_owner: !ai.is_spam_or_automated && (needsHuman || !autoSend),\n    status: ai.is_spam_or_automated ? 'ignored' : (autoSend ? 'auto_sent' : 'sent_to_owner'),\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "308b9163-2b98-4029-b0a0-8bf8de55408b",
+      "name": "Decide: send or hand to human",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH i AS (\n    INSERT INTO inquiries (customer_id, from_email, subject, body, ai_reply, needs_human, human_reason, status)\n    VALUES ($1::INT, $2, $3, $4, $5, $6::BOOLEAN, $7, $8)\n    RETURNING id\n),\nlang AS (\n    UPDATE customers SET language = COALESCE(NULLIF($9, ''), language) WHERE id = $1::INT\n),\ninterests AS (\n    INSERT INTO customer_interests (customer_id, brand, reference, source)\n    SELECT $1::INT, x.brand, NULLIF(x.reference, ''), 'inquiry'\n    FROM jsonb_to_recordset($10::jsonb) AS x(brand TEXT, reference TEXT)\n    WHERE COALESCE(x.brand, '') <> ''\n    ON CONFLICT (customer_id, lower(brand), lower(coalesce(reference, ''))) DO NOTHING\n)\nSELECT id AS inquiry_id FROM i;",
+        "options": {
+          "queryReplacement": "={{ [$json.customer_id, $json.customer_email, $json.subject, $json.body, $json.reply_body, $json.needs_human, $json.human_reason, $json.status, $json.language, JSON.stringify($json.interests)] }}"
+        }
+      },
+      "id": "f036b692-965e-4c83-9efa-6b737d974ade",
+      "name": "Save inquiry",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "1a990294-a457-4aae-b465-79760ec49ab2",
+              "leftValue": "={{ $('Decide: send or hand to human').item.json.send_to_customer }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f1d1439e-75f3-44be-ac5b-f2a26516feed",
+      "name": "Send to customer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $('Decide: send or hand to human').item.json.from_email }}",
+        "toEmail": "={{ $('Decide: send or hand to human').item.json.customer_email }}",
+        "subject": "={{ $('Decide: send or hand to human').item.json.reply_subject }}",
+        "emailFormat": "text",
+        "options": {
+          "appendAttribution": false
+        },
+        "text": "={{ $('Decide: send or hand to human').item.json.reply_body }}"
+      },
+      "id": "a11d5d7f-a1ec-4fc8-9d06-9b4075ec1dfa",
+      "name": "Email customer",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2800,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "830632b9-c90c-430d-a46d-f28f84a76b1b",
+              "leftValue": "={{ $('Decide: send or hand to human').item.json.notify_owner }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9f1cc005-012a-47e8-82e0-fbf62ec25690",
+      "name": "Tell owner?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2520,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Make text safe to put inside an HTML email\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst money = (n) => n == null || n === '' ? '-' : '$' + Math.round(Number(n)).toLocaleString('en-US');\n\nconst d = $('Decide: send or hand to human').item.json;\nreturn {\n  json: {\n    owner_email: d.owner_email,\n    from_email: d.from_email,\n    subject: `${d.needs_human ? 'ACTION NEEDED' : 'Draft reply'}: ${d.customer_name || d.customer_email} - ${d.subject}`,\n    html: `<p><b>${d.needs_human ? 'A human must handle this: ' + esc(d.human_reason) : 'Automatic sending is off. Review and send this draft.'}</b></p>\n<p>Customer: ${esc(d.customer_name)} &lt;${esc(d.customer_email)}&gt;</p>\n<h4>Customer wrote</h4><p style=\"white-space:pre-wrap\">${esc(d.body)}</p>\n<h4>${d.send_to_customer ? 'Holding reply already sent' : 'Suggested reply (not sent)'}</h4>\n<p style=\"white-space:pre-wrap\">${esc(d.reply_body)}</p>`,\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "ec58a209-75e8-4160-9baf-f37e19453081",
+      "name": "Build owner email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.owner_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "options": {
+          "appendAttribution": false
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "3a614d21-bbfb-4e1a-bbea-1cbf0f6b502f",
+      "name": "Email owner",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        3080,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Personalized replies\nEvery new email is answered by Claude **in the customer's language**, using your real stock list. The customer is added to the database and their interests are saved (for alerts and campaigns).\n\n**Human only:** payment, receipts, discounts, negotiation and deals above `large_deal_usd` go to you. The customer gets a polite holding reply.\n\nSet `auto_send_replies` to `false` to review every reply first. \"STOP\" unsubscribes the customer.",
+        "height": 320,
+        "width": 620
+      },
+      "id": "e9e1d728-ca23-4cdc-be75-610fe34830df",
+      "name": "Note 14",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        280,
+        -120
+      ]
+    }
+  ],
+  "connections": {
+    "New email (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Read email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read email": {
+      "main": [
+        [
+          {
+            "node": "Save customer + load context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save customer + load context": {
+      "main": [
+        [
+          {
+            "node": "Unsubscribe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Unsubscribe?": {
+      "main": [
+        [
+          {
+            "node": "Unsubscribe customer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build reply request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build reply request": {
+      "main": [
+        [
+          {
+            "node": "Ask Claude (reply)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Claude (reply)": {
+      "main": [
+        [
+          {
+            "node": "Decide: send or hand to human",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide: send or hand to human": {
+      "main": [
+        [
+          {
+            "node": "Save inquiry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save inquiry": {
+      "main": [
+        [
+          {
+            "node": "Send to customer?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Tell owner?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to customer?": {
+      "main": [
+        [
+          {
+            "node": "Email customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tell owner?": {
+      "main": [
+        [
+          {
+            "node": "Build owner email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build owner email": {
+      "main": [
+        [
+          {
+            "node": "Email owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

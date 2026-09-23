@@ -1,0 +1,154 @@
+{
+  "id": "watchTradeWf0400",
+  "name": "04 - Deal finder (hourly)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "139ea9f2-a584-4bed-8e9d-885b128a4fde",
+      "name": "Every hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH s AS (\n    SELECT setting_num('deal_threshold_pct')  AS threshold,\n           setting_num('suspicious_deal_pct') AS suspicious,\n           setting_num('min_price_samples')   AS min_samples\n),\ncandidates AS (\n    -- asking prices seen in the last 2 days that we have not flagged before\n    SELECT DISTINCT ON (mp.source, mp.external_id)\n           mp.*,\n           fair_price(mp.reference, mp.condition, COALESCE(mp.box_papers, FALSE)) AS fair\n    FROM market_prices mp\n    JOIN source_weights sw ON sw.source = mp.source AND sw.price_type = 'asking'\n    WHERE mp.created_at >= now() - INTERVAL '2 days'\n      AND mp.price_usd IS NOT NULL\n      AND NOT EXISTS (\n          SELECT 1 FROM deals d JOIN market_prices m2 ON m2.id = d.market_price_id\n          WHERE m2.source = mp.source AND m2.external_id = mp.external_id)\n    ORDER BY mp.source, mp.external_id, mp.observed_on DESC\n),\nnew_deals AS (\n    INSERT INTO deals (market_price_id, fair_usd, price_usd, discount_pct, suspicious)\n    SELECT c.id, c.fair, c.price_usd,\n           ROUND((1 - c.price_usd / c.fair) * 100, 1),\n           (1 - c.price_usd / c.fair) * 100 > s.suspicious\n    FROM candidates c\n    CROSS JOIN s\n    JOIN v_fair_prices v ON v.reference = c.reference AND v.samples >= s.min_samples\n    WHERE c.fair > 0\n      AND c.price_usd <= c.fair * (1 - s.threshold / 100)\n    RETURNING *\n)\nSELECT d.discount_pct, d.suspicious, d.price_usd, d.fair_usd,\n       mp.source, mp.seller, mp.brand, mp.reference, mp.title, mp.condition,\n       mp.price, mp.currency, mp.country, mp.url,\n       (SELECT value FROM settings WHERE key = 'owner_email') AS owner_email,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM new_deals d\nJOIN market_prices mp ON mp.id = d.market_price_id\nORDER BY d.discount_pct DESC;",
+        "options": {}
+      },
+      "id": "8875c13c-4540-49f7-ad45-2fc9aded411d",
+      "name": "Find new deals",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Make text safe to put inside an HTML email\nconst esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst money = (n) => n == null || n === '' ? '-' : '$' + Math.round(Number(n)).toLocaleString('en-US');\n\nconst deals = $input.all().map(i => i.json);\nconst rows = deals.map(d => `\n  <tr>\n    <td><b>${esc(d.discount_pct)}%</b>${d.suspicious ? '<br><span style=\"color:#b00\">too cheap - check for fake/scam</span>' : ''}</td>\n    <td>${esc(d.brand)} ${esc(d.reference)}<br><small>${esc(d.title)}</small></td>\n    <td>${esc(d.condition)}</td>\n    <td>${esc(d.price)} ${esc(d.currency)}<br><small>${money(d.price_usd)}</small></td>\n    <td>${money(d.fair_usd)}</td>\n    <td>${esc(d.country)}</td>\n    <td>${esc(d.source)}<br><small>${esc(d.seller)}</small></td>\n    <td>${d.url ? `<a href=\"${esc(d.url)}\">open</a>` : ''}</td>\n  </tr>`).join('');\n\nreturn [{\n  json: {\n    owner_email: deals[0].owner_email,\n    from_email: deals[0].from_email,\n    subject: `${deals.length} underpriced watch${deals.length > 1 ? 'es' : ''} found (best: ${deals[0].discount_pct}% below fair price)`,\n    html: `<p>New listings below fair price. Always check the seller, photos and papers before buying.</p>\n<table border=\"1\" cellpadding=\"6\" cellspacing=\"0\" style=\"border-collapse:collapse;font-family:Arial;font-size:13px\">\n<tr style=\"background:#eee\"><th>Below fair</th><th>Watch</th><th>Condition</th><th>Price</th><th>Fair price</th><th>Country</th><th>Source</th><th>Link</th></tr>\n${rows}\n</table>`,\n  },\n}];\n"
+      },
+      "id": "cd0c9a91-67fc-4e5c-b2e9-c85b124ed116",
+      "name": "Build deal email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.owner_email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "html",
+        "options": {
+          "appendAttribution": false
+        },
+        "html": "={{ $json.html }}"
+      },
+      "id": "649c02d6-4cbe-412e-8b0c-262346d6788a",
+      "name": "Email owner",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1400,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "408f00d8-8a0b-459d-92f8-17cc4618b7ad",
+      "name": "Stop if no rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Deal finder\nEvery hour, compares new asking prices with the **fair price** (SQL function `fair_price()`). Anything more than `deal_threshold_pct` (default 12%) below is saved in `deals` and emailed to you.\n\nDeals far too cheap (`suspicious_deal_pct`, 40%) are marked - these are often fakes or scams.",
+        "height": 260,
+        "width": 520
+      },
+      "id": "88dd89fe-3acb-4647-a08e-2b842230c668",
+      "name": "Note 5",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -60
+      ]
+    }
+  ],
+  "connections": {
+    "Every hour": {
+      "main": [
+        [
+          {
+            "node": "Find new deals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find new deals": {
+      "main": [
+        [
+          {
+            "node": "Stop if no rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no rows": {
+      "main": [
+        [
+          {
+            "node": "Build deal email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build deal email": {
+      "main": [
+        [
+          {
+            "node": "Email owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

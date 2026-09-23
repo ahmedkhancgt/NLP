@@ -1,0 +1,260 @@
+{
+  "id": "watchTradeWf0900",
+  "name": "09 - Weekly interest campaign",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 10
+            }
+          ]
+        }
+      },
+      "id": "00cf94b5-4008-4dfd-b224-ff8a8aceaac6",
+      "name": "Mondays 10:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH matches AS (\n    SELECT DISTINCT c.id AS customer_id, w.id AS watch_id, w.created_at\n    FROM customers c\n    JOIN customer_interests ci ON ci.customer_id = c.id\n    JOIN watches w\n      ON lower(w.brand) = lower(ci.brand)\n     AND (ci.reference IS NULL OR lower(ci.reference) = lower(w.reference))\n     AND (ci.max_budget_usd IS NULL OR w.ask_usd <= ci.max_budget_usd * 1.1)\n    WHERE c.marketing_opt_in\n      AND w.status = 'in_stock'\n      AND w.listings_done\n      AND w.auth_status IN ('ai_checked', 'watchmaker_verified')\n      AND NOT EXISTS (SELECT 1 FROM messages_log m WHERE m.customer_id = c.id AND m.watch_id = w.id)\n      AND NOT EXISTS (SELECT 1 FROM messages_log m\n                      WHERE m.customer_id = c.id\n                        AND m.campaign IN ('interest_campaign', 'reengagement')\n                        AND m.created_at > now() - setting_num('campaign_cooldown_days') * INTERVAL '1 day')\n),\ntop5 AS (\n    SELECT *, row_number() OVER (PARTITION BY customer_id ORDER BY created_at DESC) AS n\n    FROM matches\n)\nSELECT c.id AS customer_id, c.name, c.email, c.language,\n       json_agg(json_build_object(\n           'watch_id', w.id, 'brand', w.brand, 'model', w.model, 'reference', w.reference,\n           'year', w.year, 'condition', w.condition, 'box_papers', w.box_papers,\n           'price_usd', w.ask_usd,\n           'listing_title', COALESCE(l.title, en.title))) AS watches,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM top5 t\nJOIN customers c ON c.id = t.customer_id\nJOIN watches w   ON w.id = t.watch_id\nLEFT JOIN listings l  ON l.watch_id = w.id AND l.language = c.language\nLEFT JOIN listings en ON en.watch_id = w.id AND en.language = 'en'\nWHERE t.n <= 5\nGROUP BY c.id;",
+        "options": {}
+      },
+      "id": "d26d6d2f-f1cf-479f-bf58-b909f413b8f6",
+      "name": "Customers with new matches",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $json;\n\nconst SYSTEM = \"You write short, personal marketing emails for a luxury watch dealer. Write in the customer's language (ISO code given). Friendly and elegant, not pushy, max 150 words. Mention each watch with its price in USD. Only use the facts given. Plain text, no markdown. End with the business name and the line: 'Reply STOP to unsubscribe.' (translated into the customer's language).\";\nconst SCHEMA = {\n  \"type\": \"object\",\n  \"properties\": {\n    \"subject\": {\n      \"type\": \"string\"\n    },\n    \"body\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"subject\",\n    \"body\"\n  ],\n  \"additionalProperties\": false\n};\nconst userContent = `Business: ${d.business_name}\nCustomer name: ${d.name || ''}\nCustomer language: ${d.language}\nWatches that match their interests (JSON):\n${JSON.stringify(d.watches)}`;\n\nreturn {\n  json: {\n    claude_request: {\n      model: 'claude-opus-5',\n      max_tokens: 16000,\n      fallbacks: 'default',              // if the model declines, Anthropic retries on a fallback model\n      system: SYSTEM,\n      messages: [{ role: 'user', content: userContent }],\n      output_config: {\n        effort: 'medium',             // low / medium / high: more effort = better answers, more cost\n        format: { type: 'json_schema', schema: SCHEMA },\n      },\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "6986a945-68a1-41b0-acc7-bf67f27da2b2",
+      "name": "Build campaign request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "39a618ae-fece-4763-aa6e-a29664849691",
+      "name": "Ask Claude (campaign email)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read Claude's answer. The answer is JSON because we asked for a JSON schema.\nconst res = $json;\nif (res.stop_reason === 'refusal') {\n  throw new Error('Claude declined this request: ' + JSON.stringify(res.stop_details || {}));\n}\nconst text = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('');\nif (!text) {\n  throw new Error('Claude returned no text: ' + JSON.stringify(res).slice(0, 500));\n}\nconst ai = JSON.parse(text);\n\nconst d = $('Customers with new matches').item.json;\nreturn { json: { ...d, subject: ai.subject, body: ai.body, watch_ids: d.watches.map(w => w.watch_id) } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "2c076bd2-4935-4da5-a523-a41919a91f0e",
+      "name": "Read campaign email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "options": {
+          "appendAttribution": false
+        },
+        "text": "={{ $json.body }}"
+      },
+      "id": "6c211306-7c2e-490e-a2c7-ddbefa8cb1e8",
+      "name": "Send campaign email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages_log (customer_id, campaign, watch_id, subject)\nSELECT $1::INT, 'interest_campaign', x::INT, $2\nFROM jsonb_array_elements_text($3::jsonb) AS x;",
+        "options": {
+          "queryReplacement": "={{ [$('Read campaign email').item.json.customer_id, $('Read campaign email').item.json.subject, JSON.stringify($('Read campaign email').item.json.watch_ids)] }}"
+        }
+      },
+      "id": "816c633f-a52e-402d-b78d-18fd7d1e165f",
+      "name": "Log messages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "7ee88fa2-dfc2-4e7d-aaee-a52d44f6909d",
+      "name": "Stop if no rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Weekly campaign by interest\nEvery Monday, each opted-in customer gets one personal email (in their language) with up to 5 in-stock watches that match their interests and that they have not been sent before. Nobody gets more than one campaign per `campaign_cooldown_days`.",
+        "height": 200,
+        "width": 520
+      },
+      "id": "bb57e2b2-c3c6-49d9-b000-1fa4aaece4b5",
+      "name": "Note 8",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Mondays 10:00": {
+      "main": [
+        [
+          {
+            "node": "Customers with new matches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customers with new matches": {
+      "main": [
+        [
+          {
+            "node": "Stop if no rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no rows": {
+      "main": [
+        [
+          {
+            "node": "Build campaign request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build campaign request": {
+      "main": [
+        [
+          {
+            "node": "Ask Claude (campaign email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Claude (campaign email)": {
+      "main": [
+        [
+          {
+            "node": "Read campaign email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read campaign email": {
+      "main": [
+        [
+          {
+            "node": "Send campaign email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send campaign email": {
+      "main": [
+        [
+          {
+            "node": "Log messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

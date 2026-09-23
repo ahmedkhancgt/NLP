@@ -1,0 +1,258 @@
+{
+  "id": "watchTradeWf1000",
+  "name": "10 - Win back inactive customers (monthly)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "triggerAtDayOfMonth": 1,
+              "triggerAtHour": 11
+            }
+          ]
+        }
+      },
+      "id": "12e5b1e7-8439-4b36-b383-92bf15bf931d",
+      "name": "1st of the month 11:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        280,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT c.id AS customer_id, c.name, c.email, c.language,\n       (SELECT string_agg(w.brand || ' ' || COALESCE(w.model, '') || ' ' || w.reference, ', ')\n          FROM purchases p JOIN watches w ON w.id = p.watch_id\n         WHERE p.customer_id = c.id) AS past_purchases,\n       (SELECT string_agg(ci.brand || COALESCE(' ' || ci.reference, ''), ', ')\n          FROM customer_interests ci WHERE ci.customer_id = c.id) AS interests,\n       (SELECT json_agg(s) FROM (\n            SELECT w.id AS watch_id, w.brand, w.model, w.reference, w.year, w.condition, w.ask_usd AS price_usd\n            FROM watches w\n            WHERE w.status = 'in_stock' AND w.listings_done\n              AND w.auth_status IN ('ai_checked', 'watchmaker_verified')\n            ORDER BY (EXISTS (SELECT 1 FROM customer_interests ci\n                              WHERE ci.customer_id = c.id AND lower(ci.brand) = lower(w.brand))) DESC,\n                     w.created_at DESC\n            LIMIT 3) s) AS suggestions,\n       (SELECT value FROM settings WHERE key = 'business_name') AS business_name,\n       (SELECT value FROM settings WHERE key = 'from_email') AS from_email\nFROM customers c\nWHERE c.marketing_opt_in\n  AND GREATEST(c.last_contact_at, c.last_purchase_at, c.created_at)\n      < now() - setting_num('inactive_days') * INTERVAL '1 day'\n  AND NOT EXISTS (SELECT 1 FROM messages_log m\n                  WHERE m.customer_id = c.id AND m.campaign = 'reengagement'\n                    AND m.created_at > now() - INTERVAL '90 days')\n  AND NOT EXISTS (SELECT 1 FROM messages_log m\n                  WHERE m.customer_id = c.id AND m.campaign = 'interest_campaign'\n                    AND m.created_at > now() - setting_num('campaign_cooldown_days') * INTERVAL '1 day')\nLIMIT 200;",
+        "options": {}
+      },
+      "id": "070032f8-40d6-4025-8bd0-d5b64bc415e3",
+      "name": "Inactive customers",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $json;\n\nconst SYSTEM = \"You write short, personal 'we miss you' emails for a luxury watch dealer to past customers who have been quiet. Write in the customer's language (ISO code given). Warm, personal, max 130 words. Refer to their past purchase or interests if known (e.g. ask how they enjoy their watch). Suggest the watches given, with price in USD, and offer a private viewing. Never offer discounts. Only use facts given. Plain text, no markdown. End with the business name and 'Reply STOP to unsubscribe.' (translated).\";\nconst SCHEMA = {\n  \"type\": \"object\",\n  \"properties\": {\n    \"subject\": {\n      \"type\": \"string\"\n    },\n    \"body\": {\n      \"type\": \"string\"\n    }\n  },\n  \"required\": [\n    \"subject\",\n    \"body\"\n  ],\n  \"additionalProperties\": false\n};\nconst userContent = `Business: ${d.business_name}\nCustomer name: ${d.name || ''}\nCustomer language: ${d.language}\nPast purchases: ${d.past_purchases || 'none'}\nInterests: ${d.interests || 'unknown'}\nWatches to suggest (JSON): ${JSON.stringify(d.suggestions || [])}`;\n\nreturn {\n  json: {\n    claude_request: {\n      model: 'claude-opus-5',\n      max_tokens: 16000,\n      fallbacks: 'default',              // if the model declines, Anthropic retries on a fallback model\n      system: SYSTEM,\n      messages: [{ role: 'user', content: userContent }],\n      output_config: {\n        effort: 'medium',             // low / medium / high: more effort = better answers, more cost\n        format: { type: 'json_schema', schema: SCHEMA },\n      },\n    },\n  },\n};\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "781a2d50-a305-410a-8957-f020d2450c02",
+      "name": "Build win-back request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "anthropic-beta",
+              "value": "server-side-fallback-2026-07-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.claude_request) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "4d66089a-3fe6-42c0-b98c-289bf76ac326",
+      "name": "Ask Claude (win-back email)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read Claude's answer. The answer is JSON because we asked for a JSON schema.\nconst res = $json;\nif (res.stop_reason === 'refusal') {\n  throw new Error('Claude declined this request: ' + JSON.stringify(res.stop_details || {}));\n}\nconst text = (res.content || []).filter(b => b.type === 'text').map(b => b.text).join('');\nif (!text) {\n  throw new Error('Claude returned no text: ' + JSON.stringify(res).slice(0, 500));\n}\nconst ai = JSON.parse(text);\n\nconst d = $('Inactive customers').item.json;\nreturn { json: { ...d, subject: ai.subject, body: ai.body } };\n",
+        "mode": "runOnceForEachItem"
+      },
+      "id": "a98bda99-f04e-4ca6-ac94-75f7625ae13e",
+      "name": "Read win-back email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $json.from_email }}",
+        "toEmail": "={{ $json.email }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "options": {
+          "appendAttribution": false
+        },
+        "text": "={{ $json.body }}"
+      },
+      "id": "a3c21943-9979-47a5-836c-897ee4a6f02a",
+      "name": "Send win-back email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO messages_log (customer_id, campaign, subject)\nVALUES ($1::INT, 'reengagement', $2);",
+        "options": {
+          "queryReplacement": "={{ [$('Read win-back email').item.json.customer_id, $('Read win-back email').item.json.subject] }}"
+        }
+      },
+      "id": "ce2a2fb1-26ab-4129-a09f-070d287d25bc",
+      "name": "Log message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        2240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// When the database query finds nothing, n8n still passes one item: {\"success\": true}.\n// Remove it so the next steps only run for real rows.\nreturn $input.all()\n  .map((item, index) => ({ json: item.json, pairedItem: { item: index } }))\n  .filter(item => !(Object.keys(item.json).length === 1 && item.json.success === true));\n"
+      },
+      "id": "b4ac21cf-dfce-4398-b8fc-3eac5e274093",
+      "name": "Stop if no rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Re-engage inactive customers\nOnce a month, opted-in customers with no contact or purchase for `inactive_days` (default 180) get a personal email about their past watch and 3 suggestions. Max once every 90 days per customer.",
+        "height": 200,
+        "width": 520
+      },
+      "id": "25b22a17-349c-4dd9-878b-cdef1055c51c",
+      "name": "Note 8",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "1st of the month 11:00": {
+      "main": [
+        [
+          {
+            "node": "Inactive customers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inactive customers": {
+      "main": [
+        [
+          {
+            "node": "Stop if no rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop if no rows": {
+      "main": [
+        [
+          {
+            "node": "Build win-back request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build win-back request": {
+      "main": [
+        [
+          {
+            "node": "Ask Claude (win-back email)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Claude (win-back email)": {
+      "main": [
+        [
+          {
+            "node": "Read win-back email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read win-back email": {
+      "main": [
+        [
+          {
+            "node": "Send win-back email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send win-back email": {
+      "main": [
+        [
+          {
+            "node": "Log message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

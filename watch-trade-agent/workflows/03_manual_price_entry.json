@@ -1,0 +1,191 @@
+{
+  "id": "watchTradeWf0300",
+  "name": "03 - Add a price by hand (form)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Add a market price",
+        "formDescription": "Auction results, dealer prices, Chrono24, forums or official retail prices.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Source",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "auction"
+                  },
+                  {
+                    "option": "dealer"
+                  },
+                  {
+                    "option": "chrono24"
+                  },
+                  {
+                    "option": "forum"
+                  },
+                  {
+                    "option": "ebay_sold"
+                  },
+                  {
+                    "option": "watchcharts"
+                  },
+                  {
+                    "option": "brand_retail"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Seller or auction house",
+              "fieldType": "text",
+              "placeholder": "e.g. Phillips Geneva, Bob's Watches"
+            },
+            {
+              "fieldLabel": "Brand",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Rolex"
+            },
+            {
+              "fieldLabel": "Reference",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "126610LN"
+            },
+            {
+              "fieldLabel": "Condition",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "new"
+                  },
+                  {
+                    "option": "unworn"
+                  },
+                  {
+                    "option": "excellent"
+                  },
+                  {
+                    "option": "very_good"
+                  },
+                  {
+                    "option": "good"
+                  },
+                  {
+                    "option": "fair"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Box and papers",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "yes"
+                  },
+                  {
+                    "option": "no"
+                  },
+                  {
+                    "option": "unknown"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Price",
+              "fieldType": "number",
+              "requiredField": true,
+              "placeholder": "12500"
+            },
+            {
+              "fieldLabel": "Currency",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "USD, EUR, GBP, CHF, AED, HKD, JPY..."
+            },
+            {
+              "fieldLabel": "Country",
+              "fieldType": "text",
+              "placeholder": "2 letters: US, GB, CH, AE, HK, JP..."
+            },
+            {
+              "fieldLabel": "Link or lot number",
+              "fieldType": "text",
+              "placeholder": "https://... or Lot 123"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cee765f2-ddd5-4830-9178-0cbbdeb1231d",
+      "name": "Price entry form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        300
+      ],
+      "webhookId": "4db9771b-8096-455f-ba4e-dcd4acafd548"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO market_prices\n    (source, external_id, seller, brand, reference, title, condition, box_papers,\n     price, currency, price_usd, country, url)\nVALUES\n    ($1, COALESCE(NULLIF($9, ''), md5(random()::TEXT)), NULLIF($2, ''), $3, upper(trim($4)),\n     'Entered by hand', $5,\n     CASE $6 WHEN 'yes' THEN TRUE WHEN 'no' THEN FALSE END,\n     $7::NUMERIC, upper(trim($8)),\n     ROUND($7::NUMERIC / (SELECT per_usd FROM fx_rates WHERE currency = upper(trim($8))), 2),\n     NULLIF(upper(trim($10)), ''),\n     CASE WHEN $9 LIKE 'http%' THEN $9 END)\nRETURNING id, reference, price_usd;",
+        "options": {
+          "queryReplacement": "={{ [$json[\"Source\"], $json[\"Seller or auction house\"] || \"\", $json[\"Brand\"], $json[\"Reference\"], $json[\"Condition\"], $json[\"Box and papers\"], $json[\"Price\"], $json[\"Currency\"], $json[\"Link or lot number\"] || \"\", $json[\"Country\"] || \"\"] }}"
+        }
+      },
+      "id": "85789025-129e-49d5-a280-ddb28be509c4",
+      "name": "Save price",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Manual price entry\nOpen the form URL (Form node > *Production URL*) on your phone or computer and type in prices from auction results, dealer websites, Chrono24 or brand retail sites.\n\nSold prices from auctions count the most in the fair price.",
+        "height": 220,
+        "width": 480
+      },
+      "id": "cce375c8-51af-4841-859e-962122b581a6",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Price entry form": {
+      "main": [
+        [
+          {
+            "node": "Save price",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

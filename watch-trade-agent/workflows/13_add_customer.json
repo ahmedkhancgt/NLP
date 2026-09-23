@@ -1,0 +1,162 @@
+{
+  "id": "watchTradeWf1300",
+  "name": "13 - Add a customer (form)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "Add a customer",
+        "formDescription": "Add past buyers and new leads. Only tick marketing if the customer agreed to receive emails.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Name",
+              "fieldType": "text",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Email",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Phone",
+              "fieldType": "text",
+              "placeholder": "+971..."
+            },
+            {
+              "fieldLabel": "Country",
+              "fieldType": "text",
+              "placeholder": "2 letters"
+            },
+            {
+              "fieldLabel": "Language",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "en"
+                  },
+                  {
+                    "option": "ar"
+                  },
+                  {
+                    "option": "fr"
+                  },
+                  {
+                    "option": "de"
+                  },
+                  {
+                    "option": "zh"
+                  },
+                  {
+                    "option": "ru"
+                  },
+                  {
+                    "option": "it"
+                  },
+                  {
+                    "option": "es"
+                  },
+                  {
+                    "option": "ja"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Agreed to marketing emails",
+              "fieldType": "dropdown",
+              "requiredField": true,
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "yes"
+                  },
+                  {
+                    "option": "no"
+                  }
+                ]
+              }
+            },
+            {
+              "fieldLabel": "Interested brand",
+              "fieldType": "text",
+              "placeholder": "Rolex"
+            },
+            {
+              "fieldLabel": "Interested reference",
+              "fieldType": "text",
+              "placeholder": "126610LN (optional)"
+            },
+            {
+              "fieldLabel": "Max budget USD",
+              "fieldType": "number"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "851e16aa-a9fe-463f-bed4-199df5d4c62d",
+      "name": "Customer form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        300
+      ],
+      "webhookId": "75d5053c-0489-4947-9bf4-148519bea790"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH c AS (\n    INSERT INTO customers (name, email, phone, country, language, marketing_opt_in)\n    VALUES ($1, lower(trim($2)), NULLIF($3, ''), NULLIF(upper(trim($4)), ''), $5, $6 = 'yes')\n    ON CONFLICT (email) DO UPDATE\n    SET name = EXCLUDED.name,\n        phone = COALESCE(EXCLUDED.phone, customers.phone),\n        country = COALESCE(EXCLUDED.country, customers.country),\n        language = EXCLUDED.language,\n        marketing_opt_in = EXCLUDED.marketing_opt_in\n    RETURNING id\n),\ni AS (\n    INSERT INTO customer_interests (customer_id, brand, reference, max_budget_usd, source)\n    SELECT c.id, trim($7), NULLIF(upper(trim($8)), ''), NULLIF($9, '')::NUMERIC, 'manual'\n    FROM c\n    WHERE trim($7) <> ''\n    ON CONFLICT (customer_id, lower(brand), lower(coalesce(reference, ''))) DO UPDATE\n    SET max_budget_usd = EXCLUDED.max_budget_usd\n)\nSELECT id AS customer_id FROM c;",
+        "options": {
+          "queryReplacement": "={{ [$json[\"Name\"], $json[\"Email\"], $json[\"Phone\"] ?? \"\", $json[\"Country\"] ?? \"\", $json[\"Language\"], $json[\"Agreed to marketing emails\"], $json[\"Interested brand\"] ?? \"\", $json[\"Interested reference\"] ?? \"\", String($json[\"Max budget USD\"] || \"\")] }}"
+        }
+      },
+      "id": "32999d47-175c-47cc-b270-147fbd67dc98",
+      "name": "Save customer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        560,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Customer database\nAdd past buyers and leads one by one with this form. To import a list, see *Importing past buyers* in the README (CSV + SQL).",
+        "height": 180,
+        "width": 460
+      },
+      "id": "a226ccfa-d702-42e8-95c9-b7a802127ced",
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Customer form": {
+      "main": [
+        [
+          {
+            "node": "Save customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

@@ -44,3 +44,48 @@
 **When to use**: Designing how scope/plan changes get assessed and approved.
 **How**: Predictive — route every change through a Change Control Board with formal impact analysis across Scope/Finance/Schedule/Resources/Stakeholders/Risk, ending in Approved/Rejected/Deferred/More-Information-Needed. Adaptive — treat the backlog itself as the change mechanism: a new item gets added and prioritized (or not); lower priority = effectively deferred; removal = effectively rejected.
 **Trade-offs**: Formal CCB process adds traceability and auditability (valuable for regulated/contractual work) at the cost of speed; backlog-driven change is fast and lightweight but leaves a thinner audit trail — mismatch the pattern to the project's compliance needs at your own risk.
+
+## Earned Value Management as a Status Check
+**When to use**: Any project wanting an objective (not subjective-color) answer to "are we on budget and schedule."
+**How**: Track PV/EV/AC per work package. Compute CV (EV−AC) and SV (EV−PV) for current status; compute CPI (EV/AC) and SPI (EV/PV) for efficiency ratios; use EAC/ETC/TCPI to forecast completion (full formulas in cheatsheet.md).
+**Trade-offs**: Requires disciplined, consistent PV baselining up front — EVM is only as good as the baseline it's measured against; garbage-in baseline produces confidently-wrong status.
+
+## Critical Path vs. Critical Chain Scheduling
+**When to use**: Any predictive/hybrid schedule needing systematic float analysis.
+**How**: Use CPM (forward/backward pass, zero-float = critical path) as the default. Switch to CCPM when resources are genuinely constrained and protecting the due date matters more than tracking baseline variance — replace task-level buffers with one project buffer and track the Buffer Protection Index.
+**Trade-offs**: CCPM requires more organizational buy-in to adopt (it changes how buffers are owned/perceived) but directly protects the due date; CPM is simpler and universally understood but can hide risk inside many small task-level buffers.
+
+## Schedule Compression: Crash vs. Fast-Track
+**When to use**: Schedule needs to shrink without cutting scope, and only critical-path activities qualify.
+**How**: Crash (add resources/pay for expedited delivery) when the constraint is capacity and budget can absorb it. Fast-track (run sequential activities in parallel) when the constraint is calendar time and some rework risk is acceptable.
+**Trade-offs**: Crashing costs money with limited risk; fast-tracking costs risk (and potential rework cost) with limited direct spend — never apply either off the critical path, since it buys nothing.
+
+## Resource Optimization: Level vs. Smooth
+**When to use**: Resource demand exceeds supply at some point in the schedule.
+**How**: Level (adjust start/finish dates to balance demand/supply) when the end date can move. Smooth (adjust only within existing float) when the end date and critical path are fixed and cannot move.
+**Trade-offs**: Leveling can delay the project; smoothing protects the date but may not fully resolve over-allocation — know which constraint (date or resource conflict) you're actually protecting before choosing.
+
+## Decision Tree + Expected Monetary Value (EMV)
+**When to use**: A major decision (capital investment, build-vs-upgrade, vendor selection) with quantifiable probabilities and payoffs.
+**How**: Draw decision nodes (choices) and chance nodes (uncertain outcomes with probabilities); compute EMV = Σ(probability × payoff) per branch minus upfront cost; pick the highest-EMV branch (worked example in ch14/cheatsheet.md).
+**Trade-offs**: Forces explicit probability estimates, which can be uncomfortable/contested — but the alternative (implicit gut-feel comparison) hides the same assumptions without surfacing them for debate.
+
+## Risk Response Strategy Selection
+**When to use**: Any identified individual risk (threat or opportunity) or overall project risk needing a planned response.
+**How**: For threats, pick from Escalate/Avoid/Transfer/Mitigate/Accept. For opportunities, pick from Escalate/Exploit/Share/Enhance/Accept. For overall project risk, pick from Avoid/Exploit/Transfer-Share/Mitigate-Enhance/Accept. Match strategy to priority and whether probability, impact, or both need to change (full table in cheatsheet.md).
+**Trade-offs**: Escalating too much under-uses the project team's own authority; escalating too little means risks outside the PM's authority go unmanaged — calibrate against the project's actual risk thresholds (ch12).
+
+## PMO Model Selection
+**When to use**: Designing or evaluating a PMO.
+**How**: Don't pick one pure archetype (directive/supportive/agile) — assess what the PMO's actual "customers" (executives, PMs, teams) value, and blend characteristics from multiple models to fit that specific organizational context.
+**Trade-offs**: A hybrid PMO is harder to describe crisply in a one-line mandate, but a "pure" model chased for its own sake is explicitly flagged as a path to decreased value perception over time.
+
+## Procurement Decision Chain
+**When to use**: Any work being considered for outsourcing.
+**How**: (1) Make-or-buy analysis (ROI/IRR/NPV/payback) → (2) Procurement strategy (delivery method + contract type) → (3) Source selection method (least cost / qualifications-only / quality-based / quality-and-cost-based / single-source / fixed-budget, matched to complexity/risk) → (4) Weighted source selection criteria.
+**Trade-offs**: Skipping straight to a contract type without working through strategy and selection-method steps skips real risk-allocation decisions — each step constrains the next.
+
+## AI Task Classification Before Use
+**When to use**: Before assigning any task to an AI tool on a project.
+**How**: Classify as Automation (low complexity, minimal review), Assistance (iterative, never trust first output), or Augmentation (strategic, use AI as a brainstorming partner through multiple iterations) — then apply the review rigor that tier demands. Run the seven-point AI ethics check (bias/privacy/accountability/reliability/safety/transparency/copyright/sustainability — ch15) before scaling usage.
+**Trade-offs**: Treating an Augmentation-tier output with Automation-tier trust is the single biggest AI misuse risk named in the Guide — match scrutiny to tier every time.

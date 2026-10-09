@@ -96,3 +96,102 @@ Does the project have deliverables with fundamentally different certainty profil
 2. Minimize negative outcomes generated
 3. Restore impacts of negative outcomes
 4. Compensate/offset for negative outcomes generated
+
+## Formula Reference — Earned Value Management
+
+| Abbr. | Name | Equation | Reading |
+|---|---|---|---|
+| PV | Planned Value | (budget for scheduled work) | — |
+| EV | Earned Value | (budget value of work done) | — |
+| AC | Actual Cost | (real cost incurred) | — |
+| BAC | Budget at Completion | Sum of all budgets | Total planned cost |
+| CV | Cost Variance | EV − AC | +under budget / −over budget |
+| SV | Schedule Variance | EV − PV | +ahead / −behind schedule |
+| CPI | Cost Performance Index | EV / AC | >1 under budget, <1 over budget |
+| SPI | Schedule Performance Index | EV / PV | >1 ahead, <1 behind schedule |
+| VAC | Variance at Completion | BAC − EAC | +under / −over at completion |
+| EAC | Estimate at Completion | BAC/CPI (typical); AC+(BAC−EV) (planned rate); AC+Bottom-up ETC (replan); AC+[(BAC−EV)/(CPI×SPI)] (both influence) | Projected total cost |
+| ETC | Estimate to Complete | EAC − AC, or bottom-up re-estimate | Cost left to finish |
+| TCPI | To-Complete Performance Index | (BAC−EV)/(BAC−AC) or (BAC−EV)/(EAC−AC) | >1 harder to finish, <1 easier |
+
+**Three-point (PERT) estimate**: tE = (tO + 4tM + tP) / 6 (beta); or simple triangular tE = (tO + tM + tP) / 3, where tO=optimistic, tM=most likely, tP=pessimistic.
+
+**Critical path forward/backward pass**: EF = ES + Duration − 1 (forward pass); LS = LF − Duration + 1 (backward pass). Total float = LS − ES (or LF − EF); zero-float activities form the critical path.
+
+## Decision Table — Risk Response Strategies
+
+| Polarity | Strategies (priority-ordered by typical use) |
+|---|---|
+| Threats | Escalate (outside PM authority) → Avoid (eliminate, high-priority) → Transfer (shift to 3rd party, pay premium) → Mitigate (reduce probability/impact) → Accept (low-priority, active=reserve or passive=monitor) |
+| Opportunities | Escalate (outside PM authority) → Exploit (make it happen, 100% probability) → Share (transfer to a party better able to capture it) → Enhance (increase probability/impact) → Accept (active=reserve or passive=monitor) |
+| Overall project risk | Avoid (remove high-risk scope, or cancel if unacceptable) → Exploit (add high-benefit scope, or adjust thresholds) → Transfer/Share (3rd party involvement) → Mitigate/Enhance (replan, change scope/priority/resources) → Accept (active=overall contingency reserve or passive=monitor) |
+
+## Decision Tree Worked Example — Expected Monetary Value (EMV)
+
+Build new plant ($120M invest): 60% strong demand → $200M revenue (net $80M); 40% weak demand → $90M revenue (net −$30M). EMV = .6(80) + .4(−30) = **$36M**.
+Upgrade plant ($50M invest): 60% strong demand → $120M revenue (net $70M); 40% weak demand → $60M revenue (net $10M). EMV = .6(70) + .4(10) = **$46M**.
+→ Upgrade wins on EMV ($46M > $36M) *and* avoids the worst-case $30M loss — the lower-investment option can beat the bigger bet on both expected value and downside risk.
+
+## Quick Reference — Motivation & Leadership Models
+
+| Model | Core claim | Use when diagnosing... |
+|---|---|---|
+| Herzberg (Hygiene/Motivational) | Hygiene factors (pay, policy) prevent dissatisfaction; motivational factors (achievement, growth) create satisfaction — they don't substitute for each other | "Paid well but still unhappy" |
+| Pink (Autonomy/Mastery/Purpose) | Intrinsic motivators outlast extrinsic ones once pay is fair | Disengagement despite fair compensation |
+| McClelland (Theory of Needs) | People driven by Achievement, Power, or Affiliation in varying mix | Mismatched task assignment to what drives someone |
+| McGregor/Ouchi (Theory X/Y/Z) | X = income-only/top-down; Y = intrinsically motivated/coaching; Z = meaning-driven/long-term culture | Choosing a management style for a given team culture |
+| Tuckman Ladder | Forming→Storming→Norming→Performing→Adjourning (can stall/regress) | Team stuck in conflict or underperforming |
+| Emotional Intelligence | Self-Awareness, Self-Management, Social Awareness, Social Skills | PM/team interpersonal friction |
+
+## Quick Reference — Conflict Resolution Modes
+
+| Mode | Approach | Typical outcome |
+|---|---|---|
+| Withdraw/Avoid | Retreat, postpone | Unresolved, deferred |
+| Smooth/Accommodate | Concede to preserve harmony | One-sided |
+| Compromise/Reconcile | Partial satisfaction all around | Lose-lose (sometimes) |
+| Force/Direct | Push viewpoint via power position | Win-lose |
+| Collaborate/Problem-solve | Incorporate multiple viewpoints, open dialogue | Win-win |
+
+## Quick Reference — Schedule Compression & Resource Optimization
+
+| Technique | Mechanism | Cost | Risk | Can change critical path/end date? |
+|---|---|---|---|---|
+| Crashing | Add resources to critical-path activities | Money | Low-moderate | No (shortens it) |
+| Fast tracking | Run sequential activities in parallel | Low direct cost | Rework/quality risk | No (shortens it) |
+| Resource leveling | Shift dates to balance resource supply/demand | Schedule delay | Low | Yes, can change |
+| Resource smoothing | Adjust only within existing float | None (by design) | May not fully resolve overallocation | No, never changes |
+
+## Quick Reference — Contract Type Risk Allocation
+
+| Contract type | Cost risk mainly on | Best fit |
+|---|---|---|
+| Fixed-price | Seller | Well-defined, accurately estimable scope |
+| Cost-reimbursable | Buyer | Uncertain scope, high-risk/R&D |
+| Time & Materials (T&M) | Shared | Small projects, undefined scope |
+| Target-cost | Shared (gain/loss formula) | Encourage efficiency, retain flexibility |
+
+## Quick Reference — AI Ethics Checklist (run before scaling AI use)
+
+Bias (diversify data, test periodically) · Privacy (secure sensitive data, clear policy) · Accountability (a human always owns the decision) · Reliability (validate output — may be wrong) · Safety (design/test/monitor properly) · Transparency (share how data/algorithms/decisions work) · Copyright (ownership of AI output is unsettled) · Sustainability (every request consumes real resources)
+
+## Decision Tree — ADR Escalation Ladder
+
+```
+Dispute arises
+├── Try Negotiation first (direct, no third party)
+│      └── Unresolved → Mediation (neutral facilitator)
+│             └── Unresolved → Arbitration (binding 3rd-party decision)
+│                    or → Dispute Review Board (if pre-established panel exists)
+│                    or → Expert Determination (narrow technical/financial question)
+│                           └── Still unresolved → Litigation (last resort only)
+```
+
+## Tells & Smells (additional)
+
+- **Management reserve being used to cover a known, already-identified risk** → should have drawn from contingency reserve instead; this blurs accountability and depletes the true emergency buffer.
+- **TCPI meaningfully above 1.0 with no plan change** → remaining work must be done more efficiently than everything so far; flag as a feasibility risk, not just a status number.
+- **Crashing a non-critical-path activity** → wastes money for zero schedule benefit.
+- **An AI augmentation-tier output (e.g., portfolio trade-off analysis) accepted without iteration/review** → treating it with automation-tier trust; the single most common AI misuse pattern named in the Guide.
+- **Jumping straight to a contract type without a make-or-buy analysis or source-selection method** → skips real risk-allocation decisions upstream.
+- **A PMO chasing the "ideal" model** (directive/supportive/agile) and switching types repeatedly → explicitly flagged as decreasing value perception, not improving it.
